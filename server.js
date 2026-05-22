@@ -1,0 +1,390 @@
+import dotenv from 'dotenv';
+import express from 'express';
+import cors from 'cors';
+import multer from 'multer';
+
+dotenv.config();
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const upload = multer({ storage: multer.memoryStorage() });
+
+/* =========================
+   MANDI DATA
+========================= */
+const mandiPrices = [
+    { fasal: 'गेहूं', bhav: '₹2,275', badlav: '+15', unit: '/कुंतल' },
+    { fasal: 'धान', bhav: '₹2,183', badlav: '+8', unit: '/कुंतल' },
+    { fasal: 'मक्का', bhav: '₹1,950', badlav: '-10', unit: '/कुंतल' },
+    { fasal: 'सरसों', bhav: '₹5,200', badlav: '+25', unit: '/कुंतल' },
+    { fasal: 'सोयाबीन', bhav: '₹4,100', badlav: '+12', unit: '/कुंतल' },
+];
+
+/* =========================
+   CITY COORDINATES
+========================= */
+const cityCoordinates = {
+    delhi: { lat: '28.7041', lon: '77.1025' },
+    mumbai: { lat: '19.0760', lon: '72.8777' },
+    kolkata: { lat: '22.5726', lon: '88.3639' },
+    chennai: { lat: '13.0827', lon: '80.2707' },
+    bangalore: { lat: '12.9716', lon: '77.5946' },
+    varanasi: { lat: '25.3200', lon: '82.9789' }
+};
+
+const DATA_GOV_API_KEY = process.env.MANDI_API_KEY || process.env.DATA_GOV_API_KEY;
+const DATA_GOV_RESOURCE_ID = process.env.DATA_GOV_RESOURCE_ID || '9ef84268-d588-465a-a308-a864a43d0070';
+const AGMARKNET_API_URL = process.env.AGMARKNET_API_URL;
+const AGMARKNET_API_KEY = process.env.AGMARKNET_API_KEY;
+
+console.log('Smart Kisan backend starting...');
+console.log('MANDI API key loaded:', DATA_GOV_API_KEY ? 'yes' : 'no');
+console.log('AGMARKNET API configured:', AGMARKNET_API_URL ? 'yes' : 'no');
+console.log('Mandi resource id:', DATA_GOV_RESOURCE_ID);
+
+/* =========================
+   ROUTES
+========================= */
+
+app.get('/api/mandi', async (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit || '16', 10), 50);
+
+    const apiKeyPresent = Boolean(DATA_GOV_API_KEY || AGMARKNET_API_KEY || AGMARKNET_API_URL);
+    const fallbackResponse = {
+        source: 'fallback',
+        lastUpdated: new Date().toISOString(),
+        apiError: apiKeyPresent ? 'मंडी API अनुरोध विफल हुआ' : 'मंडी API कुंजी/URL अनुपलब्ध है',
+        records: mandiPrices.map((item) => ({
+            state: 'India',
+            district: '',
+            market: 'Local Mandi',
+            commodity: item.fasal,
+            arrival_date: new Date().toLocaleDateString('hi-IN'),
+            min_price: parseInt(item.bhav.replace(/[^0-9]/g, '')) || 0,
+            max_price: parseInt(item.bhav.replace(/[^0-9]/g, '')) || 0,
+            modal_price: parseInt(item.bhav.replace(/[^0-9]/g, '')) || 0,
+        })),
+    };
+
+    if (!apiKeyPresent) {
+        return res.json(fallbackResponse);
+    }
+
+    try {
+        let apiData;
+        let sourceLabel = 'data.gov.in';
+
+        // Use data.gov.in API directly (AGMARKNET is hosted there)
+        const url = `https://api.data.gov.in/resource/${DATA_GOV_RESOURCE_ID}?api-key=${DATA_GOV_API_KEY}&format=json&limit=${limit}&sort=timestamp%20desc`;
+        const apiResponse = await fetch(url);
+        apiData = await apiResponse.json();
+        if (!apiResponse.ok || !Array.isArray(apiData.records)) {
+            throw new Error(`API returned status ${apiResponse.status}: ${JSON.stringify(apiData)}`);
+        }
+        sourceLabel = 'agmarknet';
+
+        const mandiPricesFromApi = apiData.records.map((record) => ({
+            commodity: record.commodity || record.commodity_name || 'Unknown',
+            variety: record.variety || record.commodity_variety || '',
+            market: record.market || record.market_type || record.market_name || 'Unknown Market',
+            state: record.state || record.state_name || record.location || 'Unknown',
+            min_price: record.min_price != null ? record.min_price : record.min_price_kg != null ? record.min_price_kg : record.modal_price != null ? record.modal_price : '0',
+            max_price: record.max_price != null ? record.max_price : record.max_price_kg != null ? record.max_price_kg : record.modal_price != null ? record.modal_price : '0',
+            modal_price: record.modal_price != null ? record.modal_price : record.modal_price_kg != null ? record.modal_price_kg : record.min_price != null ? record.min_price : '0',
+            unit: record.unit || record.price_unit || '₹',
+            last_updated: record.arrival_date || record.timestamp || record.date || apiData.last_updated || new Date().toISOString(),
+            trend: record.price_change ? (String(record.price_change).trim().startsWith('-') ? 'down' : 'up') : 'flat',
+        }));
+
+        return res.json({
+            source: sourceLabel,
+            lastUpdated: new Date().toISOString(),
+            apiError: '',
+            records: mandiPricesFromApi,
+        });
+    } catch (error) {
+        console.error('Mandi API failed:', error.message || error);
+        fallbackResponse.apiError = String(error.message || 'Unknown error');
+        return res.json(fallbackResponse);
+    }
+});
+
+app.get('/api/status', (req, res) => {
+    res.json({ status: 'Smart Kisan backend running 🚀' });
+});
+
+/* =========================
+   FARMING KNOWLEDGE BASE
+========================= */
+const farmingKnowledgeBase = {
+    'hi': {
+        'कीट': 'फसलों में कीटों से बचाव के लिए:\n1. नीम का तेल छिड़कें\n2. ट्राइकोडर्मा का उपयोग करें\n3. जैव कीटनाशक लगाएं\n4. खेत को साफ रखें',
+        'पानी': 'सिंचाई के सुझाव:\n1. गर्मी में 7-10 दिन का अंतराल\n2. सर्दी में 15-20 दिन का अंतराल\n3. बारिश में कम पानी दें\n4. जल निकास जरूरी है',
+        'खाद': 'खाद के प्रयोग:\n1. गोबर की खाद 5-10 टन/हेक्टेयर\n2. नीम केक 500 किग्रा/हेक्टेयर\n3. यूरिया 100-150 किग्रा/हेक्टेयर\n4. जैविक खाद बेहतर है',
+        'फसल': 'प्रमुख फसलें:\n- गेहूं (अक्टूबर-मार्च)\n- धान (जून-अक्टूबर)\n- मक्का (जून-सितंबर)\n- सोयाबीन (जुलाई-नवंबर)',
+    },
+    'en': {
+        'pest': 'Pest management tips:\n1. Use neem oil spray\n2. Apply Trichoderma\n3. Use bio-pesticides\n4. Keep field clean and weed-free',
+        'water': 'Irrigation guide:\n1. Summer: Every 7-10 days\n2. Winter: Every 15-20 days\n3. During rain: Reduce watering\n4. Proper drainage is essential',
+        'fertilizer': 'Fertilizer usage:\n1. FYM: 5-10 tons/hectare\n2. Neem cake: 500 kg/hectare\n3. Urea: 100-150 kg/hectare\n4. Organic fertilizers are better',
+        'crop': 'Major crops:\n- Wheat (Oct-March)\n- Rice (June-October)\n- Maize (June-September)\n- Soybean (July-November)',
+    }
+};
+
+function searchKnowledgeBase(message, language) {
+    const kb = farmingKnowledgeBase[language] || farmingKnowledgeBase['en'];
+    const keywords = Object.keys(kb);
+
+    for (let keyword of keywords) {
+        if (message.toLowerCase().includes(keyword.toLowerCase())) {
+            return kb[keyword];
+        }
+    }
+    return null;
+}
+
+// Friendly greeting phrases (both Hindi and English)
+const greetingPhrases = {
+    hi: ['नमस्ते', 'नमस्कार', 'नमस्ते किसान', 'नमस्ते किसान भाई', 'नमस्ते भाई', 'नमस्ते बहनों', 'नमस्ते भई', 'नमस्ते भाईयों', 'हाय', 'हेलो'],
+    en: ['hi', 'hii', 'hello', 'hey', 'hiya', 'good morning', 'good afternoon', 'good evening']
+};
+
+function isGreeting(message, language) {
+    if (!message) return false;
+    const text = message.trim().toLowerCase();
+    const phrases = greetingPhrases[language] || greetingPhrases['en'];
+    return phrases.some((p) => text === p || text.startsWith(p));
+}
+
+/* =========================
+   CHATBOT API (GEMINI with Fallback)
+========================= */
+app.post('/api/chat', async (req, res) => {
+    try {
+        const { message, language = 'en' } = req.body;
+        const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+        if (!message || !message.trim()) {
+            return res.status(400).json({
+                reply: language === 'hi'
+                    ? 'कृपया कोई संदेश भेजें।'
+                    : 'Please send a message.'
+            });
+        }
+
+        // Friendly greeting handling
+        if (isGreeting(message, language)) {
+            const greetReply = language === 'hi'
+                ? 'नमस्ते किसान भाई! 😊 मैं आपकी कैसे मदद कर सकता हूँ? आप फसल, कीट, खाद या सिंचाई के बारे में पूछ सकते हैं।'
+                : 'Hello! 😊 How can I help with your farm today? Ask about crops, pests, fertilizers, or irrigation.';
+            return res.json({ reply: greetReply });
+        }
+
+        // Check knowledge base next
+        const kbAnswer = searchKnowledgeBase(message, language);
+        if (kbAnswer) {
+            return res.json({ reply: kbAnswer });
+        }
+
+        // If no API key, use generic response
+        if (!GEMINI_API_KEY) {
+            return res.json({
+                reply: language === 'hi'
+                    ? 'मुझे आपके सवाल का सटीक जवाब नहीं पता। कृपया कीट, पानी, खाद, या फसल के बारे में पूछें।'
+                    : 'I don\'t have information about that. Please ask about pests, water, fertilizers, or crops.'
+            });
+        }
+
+        const systemPrompt = language === 'hi'
+            ? `आप एक कृषि सहायक हैं जो भारतीय किसानों को हिंदी में मदद देते हैं। आपकी जिम्मेदारी है:
+            - खेती, फसल उपज, कीट प्रबंधन, खाद, सिंचाई आदि के बारे में सलाह देना
+            - सरल, आसान भाषा में उत्तर देना
+            - व्यावहारिक सुझाव देना जो एक सामान्य किसान समझ सके
+            कृपया हमेशा हिंदी में उत्तर दें।`
+            : `You are an agricultural assistant helping Indian farmers. Provide advice on farming, crop yield, pest management, fertilizers, irrigation in simple English.`;
+
+        const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-goog-api-key': GEMINI_API_KEY,
+            },
+            body: JSON.stringify({
+                system_instruction: {
+                    parts: [{ text: systemPrompt }]
+                },
+                contents: [
+                    {
+                        parts: [{ text: message }]
+                    }
+                ]
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.candidates || !data.candidates[0] || !data.candidates[0].content) {
+            console.error('Gemini API error:', data);
+            // Fallback response
+            return res.json({
+                reply: language === 'hi'
+                    ? 'क्षमा करें, फिलहाल मुझे सटीक जवाब नहीं दिया जा सकता। कृपया कीट, पानी, खाद, या फसल के बारे में पूछें।'
+                    : 'I can\'t provide a precise answer right now. Please ask about pests, water, fertilizers, or crops.'
+            });
+        }
+
+        const reply = data.candidates[0].content.parts[0].text;
+        res.json({ reply });
+
+    } catch (error) {
+        console.error('Chat error:', error);
+        res.json({
+            reply: 'क्षमा करें। कृपया कीट, पानी, खाद, या फसल के बारे में पूछें। / Sorry, ask about pests, water, fertilizers, or crops.'
+        });
+    }
+});
+
+/* =========================
+   WEATHER API (FINAL FIXED)
+========================= */
+app.get('/api/weather', async (req, res) => {
+    try {
+        const apiKey = process.env.OPENWEATHER_API_KEY;
+
+        if (!apiKey) {
+            return res.status(500).json({ error: "API key missing" });
+        }
+
+        let lat, lon;
+
+        // 👉 1. lat/lon priority
+        if (req.query.lat && req.query.lon) {
+            lat = req.query.lat;
+            lon = req.query.lon;
+        }
+
+        // 👉 2. city support (case insensitive)
+        else if (req.query.city) {
+            const city = req.query.city.toLowerCase();
+            const coords = cityCoordinates[city] || cityCoordinates['delhi'];
+            lat = coords.lat;
+            lon = coords.lon;
+        }
+
+        // 👉 3. default Delhi
+        else {
+            lat = '28.7041';
+            lon = '77.1025';
+        }
+
+        const url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${apiKey}&units=metric`;
+
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (!response.ok || !data.main) {
+            throw new Error("Weather API failed");
+        }
+
+        const reverseUrl = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=jsonv2&addressdetails=1`;
+        const reverseResponse = await fetch(reverseUrl, {
+            headers: { 'User-Agent': 'Smart Kisan App - lokation lookup' }
+        });
+        const reverseData = await reverseResponse.json();
+
+        const address = reverseData?.address || {};
+        const placeName =
+            address.suburb ||
+            address.neighbourhood ||
+            address.village ||
+            address.hamlet ||
+            address.city_block ||
+            address.residential ||
+            address.road ||
+            address.town ||
+            address.city ||
+            address.county ||
+            address.state ||
+            address.country;
+        const cityOrTown =
+            address.city ||
+            address.town ||
+            address.municipality ||
+            address.city_district ||
+            address.state_district ||
+            address.county ||
+            address.state;
+        const state =
+            address.state ||
+            address.state_district ||
+            address.region ||
+            address.county;
+        const country = address.country;
+        const locationParts = [placeName, cityOrTown, state, country]
+            .filter((value, index, self) => value && self.indexOf(value) === index);
+        let finalLocation = locationParts.join(', ');
+
+        if (!finalLocation || finalLocation.split(',').length < 2) {
+            const displayParts = reverseData?.display_name
+                ? reverseData.display_name.split(',').map((part) => part.trim()).filter(Boolean)
+                : [];
+            finalLocation = displayParts.slice(0, 4).join(', ') || displayParts.join(', ') || data.name || "Unknown";
+        } else if (!finalLocation.includes(country) && reverseData?.display_name) {
+            const displayParts = reverseData.display_name.split(',').map((part) => part.trim()).filter(Boolean);
+            const extras = displayParts.filter((part) => !finalLocation.includes(part));
+            if (extras.length) {
+                finalLocation = [finalLocation, ...extras.slice(0, 2)].join(', ');
+            }
+        }
+
+        const conditionMap = {
+            Clear: 'साफ आसमान ☀️',
+            Clouds: 'बादल ☁️',
+            Rain: 'बारिश 🌧️',
+            Drizzle: 'फुहार 🌦️',
+            Thunderstorm: 'आंधी ⛈️',
+            Snow: 'बर्फ ❄️',
+            Mist: 'कोहरा 🌫️',
+            Fog: 'घना कोहरा 🌫️',
+            Haze: 'धुंध 🌫️',
+        };
+
+        const weather = {
+            location: finalLocation,
+            temp: `${Math.round(data.main.temp)}°C`,
+            condition: conditionMap[data.weather[0].main] || data.weather[0].description,
+            max: `${Math.round(data.main.temp_max)}°`,
+            min: `${Math.round(data.main.temp_min)}°`,
+            humidity: `${data.main.humidity}%`,
+            wind: `${Math.round((data.wind?.speed || 0) * 3.6)} km/h`,
+        };
+
+        res.json(weather);
+
+    } catch (error) {
+        console.log("⚠️ Weather fallback used", error.message);
+
+        res.json({
+            location: "Delhi",
+            temp: "30°C",
+            condition: "सामान्य मौसम",
+            max: "35°",
+            min: "25°",
+            humidity: "60%",
+            wind: "10 km/h"
+        });
+    }
+});
+
+/* =========================
+   START SERVER
+========================= */
+const port = process.env.PORT || 5000;
+
+app.listen(port, () => {
+    console.log(`🚀 Smart Kisan running: http://localhost:${port}`);
+});
