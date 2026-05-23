@@ -1,5 +1,6 @@
 import { useState, useRef, type ChangeEvent } from 'react';
 import { Camera, Upload, Send, Leaf, AlertTriangle, CheckCircle, FlaskConical } from 'lucide-react';
+import { apiUrl } from '../../api';
 
 interface DiseaseResult {
     rog: string;
@@ -77,7 +78,7 @@ export default function RogPehchaan() {
             formData.append('image', fileRef.current.files[0]);
         }
 
-        fetch('http://localhost:4000/api/disease', {
+        fetch(apiUrl('/api/disease'), {
             method: 'POST',
             body: formData,
         })

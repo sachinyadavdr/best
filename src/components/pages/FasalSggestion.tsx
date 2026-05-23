@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Leaf, MapPin, Maximize, IndianRupee, TrendingUp, AlertTriangle, CheckCircle } from 'lucide-react';
+import { apiUrl } from '../../api';
 
 interface SuggestionResult {
     fasal: string;
@@ -92,7 +93,7 @@ export default function FasalSuggestion() {
         setLoading(true);
         setApiError('');
 
-        fetch('http://localhost:4000/api/suggestion', {
+        fetch(apiUrl('/api/suggestion'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ location, budget }),

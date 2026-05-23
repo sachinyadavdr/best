@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useState } from 'react';
 import { Ruler, Leaf, Bug, Cloud, TrendingUp, MapPin, Droplets, Wind } from 'lucide-react';
 import type { Page } from '../../App';
+import { apiUrl } from '../../api';
 
 interface Props {
     setPage: (page: Page) => void;
@@ -80,7 +81,7 @@ export default function HomePage({ setPage }: Props) {
 
     // Function to get emoji based on weather condition and time of day
     const getWeatherEmoji = (w: Weather) => {
-        const condition = w.condition.toLowerCase();
+        const condition = (w.condition ?? '').toLowerCase();
         const isDay = isDaytime(w);
 
         // Clear sky
@@ -109,10 +110,10 @@ export default function HomePage({ setPage }: Props) {
 
     // Function to get farming suggestion based on weather
     const getWeatherSuggestion = (w: Weather) => {
-        const condition = w.condition.toLowerCase();
+        const condition = (w.condition ?? '').toLowerCase();
         const isDay = isDaytime(w);
-        const humidityNum = parseInt(w.humidity);
-        const tempNum = parseInt(w.temp);
+        const humidityNum = parseInt(w.humidity || '0');
+        const tempNum = parseInt(w.temp || '0');
 
         if (condition.includes('बारिश') || condition.includes('rain') || condition.includes('drizzle')) {
             return '💧 बारिश हो रही है। खेत में पानी जमा न होने दें। फसल को नुकसान से बचाएं।';
@@ -204,7 +205,7 @@ export default function HomePage({ setPage }: Props) {
         setMandiLoading(true);
         setMandiError('');
 
-        fetch('http://localhost:5000/api/mandi')
+        fetch(apiUrl('/api/mandi'))
             .then((response) => response.json())
             .then((data) => {
                 if (!Array.isArray(data.records)) {
@@ -240,11 +241,14 @@ export default function HomePage({ setPage }: Props) {
                 (position) => {
                     const lat = position.coords.latitude.toFixed(4);
                     const lon = position.coords.longitude.toFixed(4);
-                    fetch(`http://localhost:5000/api/weather?lat=${lat}&lon=${lon}`)
-                        .then((response) => response.json())
-                        .then(async (data) => {
+                    fetch(apiUrl(`/api/weather?lat=${lat}&lon=${lon}`))
+                        .then(async (response) => {
+                            const data = await response.json();
+                            if (!response.ok || !data || !data.temp || !data.condition) {
+                                throw new Error('Invalid weather response');
+                            }
                             const locationName = await parsePlaceName(lat, lon);
-                            setWeather({ ...data, location: locationName });
+                            setWeather({ ...defaultWeather, ...data, location: locationName });
                             console.log(data, locationName);
                             setSelectedCity(locationName || 'Current Location');
                         })
@@ -264,12 +268,18 @@ export default function HomePage({ setPage }: Props) {
         }
 
         function fetchDefaultCityWeather() {
-            fetch(`http://localhost:5000/api/weather?city=${encodeURIComponent(selectedCity)}`)
-                .then((response) => response.json())
-
-                .then((data) => setWeather(data))
-
-                .catch(() => setWeather(defaultWeather));
+            fetch(apiUrl(`/api/weather?city=${encodeURIComponent(selectedCity)}`))
+                .then(async (response) => {
+                    const data = await response.json();
+                    if (!response.ok || !data || !data.temp || !data.condition) {
+                        throw new Error('Invalid weather response');
+                    }
+                    setWeather({ ...defaultWeather, ...data });
+                })
+                .catch((err) => {
+                    console.error('Default city weather failed:', err);
+                    setWeather(defaultWeather);
+                });
         }
     }, []);
 

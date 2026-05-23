@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, MessageCircle } from 'lucide-react';
+import { apiUrl } from '../api';
 
 interface Message {
     id: string;
@@ -58,7 +59,7 @@ export default function ChatBot() {
             // Auto-detect language from user input
             const detectedLanguage = detectLanguage(inputValue);
 
-            const response = await fetch('/api/chat', {
+            const response = await fetch(apiUrl('/api/chat'), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

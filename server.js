@@ -38,11 +38,14 @@ const DATA_GOV_API_KEY = process.env.MANDI_API_KEY || process.env.DATA_GOV_API_K
 const DATA_GOV_RESOURCE_ID = process.env.DATA_GOV_RESOURCE_ID || '9ef84268-d588-465a-a308-a864a43d0070';
 const AGMARKNET_API_URL = process.env.AGMARKNET_API_URL;
 const AGMARKNET_API_KEY = process.env.AGMARKNET_API_KEY;
+const port = parseInt(process.env.PORT || '5000', 10);
+const INTERNAL_BACKEND_URL = process.env.BACKEND_URL || `http://localhost:${port}`;
 
 console.log('Smart Kisan backend starting...');
 console.log('MANDI API key loaded:', DATA_GOV_API_KEY ? 'yes' : 'no');
 console.log('AGMARKNET API configured:', AGMARKNET_API_URL ? 'yes' : 'no');
 console.log('Mandi resource id:', DATA_GOV_RESOURCE_ID);
+console.log('Backend URL:', INTERNAL_BACKEND_URL);
 
 /* =========================
    ROUTES
@@ -133,16 +136,49 @@ const farmingKnowledgeBase = {
     }
 };
 
-function searchKnowledgeBase(message, language) {
-    const kb = farmingKnowledgeBase[language] || farmingKnowledgeBase['en'];
-    const keywords = Object.keys(kb);
+const knowledgeKeywords = {
+    hi: [
+        { keys: ['कीट', 'कीटों', 'कीटपतन', 'कीटों'], answer: farmingKnowledgeBase.hi['कीट'] },
+        { keys: ['पानी', 'सिंचाई', 'जल'], answer: farmingKnowledgeBase.hi['पानी'] },
+        { keys: ['खाद', 'उर्वरक', 'खाद्य'], answer: farmingKnowledgeBase.hi['खाद'] },
+        { keys: ['फसल', 'कृषि', 'अन्न'], answer: farmingKnowledgeBase.hi['फसल'] },
+    ],
+    en: [
+        { keys: ['pest', 'pests'], answer: farmingKnowledgeBase.en['pest'] },
+        { keys: ['water', 'irrigation', 'rain', 'humidity'], answer: farmingKnowledgeBase.en['water'] },
+        { keys: ['fertilizer', 'fertilizers', 'manure'], answer: farmingKnowledgeBase.en['fertilizer'] },
+        { keys: ['crop', 'crops'], answer: farmingKnowledgeBase.en['crop'] },
+    ],
+};
 
-    for (let keyword of keywords) {
-        if (message.toLowerCase().includes(keyword.toLowerCase())) {
-            return kb[keyword];
+const weatherKeywords = {
+    hi: ['मौसम', 'बारिश', 'धूप', 'तापमान', 'आज का मौसम', 'बादल', 'आँधी', 'तूफान', 'आर्द्रता', 'हवा'],
+    en: ['weather', 'wether', 'rain', 'sunny', 'cloudy', 'temperature', 'forecast', 'humidity', 'wind'],
+};
+
+function searchKnowledgeBase(message, language) {
+    const lower = message.toLowerCase();
+    const list = knowledgeKeywords[language] || knowledgeKeywords.en;
+
+    for (let entry of list) {
+        if (entry.keys.some((keyword) => lower.includes(keyword))) {
+            return entry.answer;
         }
     }
     return null;
+}
+
+function isWeatherQuery(message, language) {
+    const lower = message.toLowerCase();
+    const list = [...weatherKeywords[language] || [], ...weatherKeywords.en];
+    return list.some((keyword) => lower.includes(keyword));
+}
+
+function formatWeatherReply(weather, language) {
+    if (language === 'hi') {
+        return `आज ${weather.location} में मौसम ${weather.condition} है। तापमान ${weather.temp} है, अधिकतम ${weather.max}, न्यूनतम ${weather.min}, आर्द्रता ${weather.humidity} और हवा ${weather.wind} है।`;
+    }
+    return `Today in ${weather.location}, the weather is ${weather.condition}. Temperature is ${weather.temp}, with a high of ${weather.max} and a low of ${weather.min}. Humidity is ${weather.humidity} and wind is ${weather.wind}.`;
 }
 
 // Friendly greeting phrases (both Hindi and English)
@@ -174,36 +210,90 @@ app.post('/api/chat', async (req, res) => {
             });
         }
 
-        // Friendly greeting handling
+        const detectedLanguage =
+            /[\u0900-\u097F]/.test(message) ? 'hi' :
+                /(?:kya|kaise|batao|barish|mausam|kisan|fasal|mandi|khad|pani|rog|keet|aaj|kal|bhav|beej|kheti)/i.test(message)
+                    ? 'hinglish'
+                    : 'en';
+
         if (isGreeting(message, language)) {
-            const greetReply = language === 'hi'
-                ? 'नमस्ते किसान भाई! 😊 मैं आपकी कैसे मदद कर सकता हूँ? आप फसल, कीट, खाद या सिंचाई के बारे में पूछ सकते हैं।'
-                : 'Hello! 😊 How can I help with your farm today? Ask about crops, pests, fertilizers, or irrigation.';
+            const greetReply =
+                detectedLanguage === 'hi'
+                    ? 'नमस्ते किसान भाई! 😊 आप मौसम, बारिश, फसल, मंडी भाव, कीट, खाद, सिंचाई या खेती से जुड़ा कोई भी सवाल पूछ सकते हैं।'
+                    : detectedLanguage === 'hinglish'
+                        ? 'Namaste kisan bhai! 😊 Aap mausam, barish, fasal, mandi bhav, keet, khad, sinchai ya kheti se juda koi bhi sawal pooch sakte ho.'
+                        : 'Hello farmer! 😊 Ask about weather, rain, crops, mandi prices, fertilizers, irrigation, or any farming topic.';
+
             return res.json({ reply: greetReply });
         }
 
-        // Check knowledge base next
+        if (isWeatherQuery(message, language)) {
+            try {
+                const weatherResponse = await fetch(`${INTERNAL_BACKEND_URL}/api/weather`);
+                const weatherData = await weatherResponse.json();
+
+                if (detectedLanguage === 'hinglish') {
+                    return res.json({
+                        reply: `Aaj ${weatherData.location} me mausam ${weatherData.condition} hai. Temperature ${weatherData.temp}, maximum ${weatherData.max}, minimum ${weatherData.min}, humidity ${weatherData.humidity} aur hawa ${weatherData.wind} hai.`
+                    });
+                }
+
+                return res.json({
+                    reply: formatWeatherReply(weatherData, detectedLanguage === 'hi' ? 'hi' : 'en')
+                });
+            } catch (weatherError) {
+                return res.json({
+                    reply: detectedLanguage === 'hi'
+                        ? 'मौसम जानकारी लाने में समस्या हो रही है। कृपया थोड़ी देर बाद फिर प्रयास करें।'
+                        : detectedLanguage === 'hinglish'
+                            ? 'Mausam ki jankari lane me problem ho rahi hai. Thodi der baad dobara try karo.'
+                            : 'Unable to retrieve weather information right now. Please try again later.'
+                });
+            }
+        }
+
         const kbAnswer = searchKnowledgeBase(message, language);
         if (kbAnswer) {
             return res.json({ reply: kbAnswer });
         }
 
-        // If no API key, use generic response
         if (!GEMINI_API_KEY) {
             return res.json({
-                reply: language === 'hi'
-                    ? 'मुझे आपके सवाल का सटीक जवाब नहीं पता। कृपया कीट, पानी, खाद, या फसल के बारे में पूछें।'
-                    : 'I don\'t have information about that. Please ask about pests, water, fertilizers, or crops.'
+                reply: detectedLanguage === 'hi'
+                    ? 'Gemini API key उपलब्ध नहीं है, इसलिए मैं अभी पूरा AI जवाब नहीं दे पा रहा हूँ।'
+                    : detectedLanguage === 'hinglish'
+                        ? 'Gemini API key available nahi hai, isliye main abhi full AI jawab nahi de pa raha hoon.'
+                        : 'Gemini API key is missing, so I cannot provide a full AI response right now.'
             });
         }
 
-        const systemPrompt = language === 'hi'
-            ? `आप एक कृषि सहायक हैं जो भारतीय किसानों को हिंदी में मदद देते हैं। आपकी जिम्मेदारी है:
-            - खेती, फसल उपज, कीट प्रबंधन, खाद, सिंचाई आदि के बारे में सलाह देना
-            - सरल, आसान भाषा में उत्तर देना
-            - व्यावहारिक सुझाव देना जो एक सामान्य किसान समझ सके
-            कृपया हमेशा हिंदी में उत्तर दें।`
-            : `You are an agricultural assistant helping Indian farmers. Provide advice on farming, crop yield, pest management, fertilizers, irrigation in simple English.`;
+        const systemPrompt = `
+You are Smart Kisan AI, a helpful assistant for Indian farmers.
+
+You can answer questions about:
+- weather and rain
+- crops and farming
+- mandi prices
+- fertilizers and pesticides
+- irrigation and water
+- soil and seeds
+- crop diseases
+- government schemes
+- animal farming
+- organic farming
+- farm tools and tractors
+- general farmer problems
+
+Language rule:
+- If the user writes in Hindi, reply only in simple Hindi.
+- If the user writes in English, reply only in simple English.
+- If the user writes Hindi using English letters, reply in simple Hinglish like WhatsApp language.
+
+Answer style:
+- Keep answers simple and practical.
+- Give farmer-friendly advice.
+- Do not say "Please ask about pests, water, fertilizers, or crops."
+`;
 
         const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
 
@@ -227,23 +317,22 @@ app.post('/api/chat', async (req, res) => {
 
         const data = await response.json();
 
-        if (!response.ok || !data.candidates || !data.candidates[0] || !data.candidates[0].content) {
-            console.error('Gemini API error:', data);
-            // Fallback response
+        if (!response.ok || !data.candidates || !data.candidates[0]?.content?.parts?.[0]?.text) {
             return res.json({
-                reply: language === 'hi'
-                    ? 'क्षमा करें, फिलहाल मुझे सटीक जवाब नहीं दिया जा सकता। कृपया कीट, पानी, खाद, या फसल के बारे में पूछें।'
-                    : 'I can\'t provide a precise answer right now. Please ask about pests, water, fertilizers, or crops.'
+                reply: detectedLanguage === 'hi'
+                    ? 'अभी AI जवाब देने में समस्या हो रही है। कृपया थोड़ी देर बाद फिर पूछें।'
+                    : detectedLanguage === 'hinglish'
+                        ? 'Abhi AI jawab dene me problem ho rahi hai. Thodi der baad dobara poochho.'
+                        : 'There is a problem getting an AI response right now. Please try again later.'
             });
         }
 
-        const reply = data.candidates[0].content.parts[0].text;
-        res.json({ reply });
+        return res.json({ reply: data.candidates[0].content.parts[0].text });
 
     } catch (error) {
         console.error('Chat error:', error);
-        res.json({
-            reply: 'क्षमा करें। कृपया कीट, पानी, खाद, या फसल के बारे में पूछें। / Sorry, ask about pests, water, fertilizers, or crops.'
+        return res.json({
+            reply: 'अभी chatbot में समस्या आ रही है। कृपया थोड़ी देर बाद फिर कोशिश करें। / Chatbot me abhi problem aa rahi hai, thodi der baad try karein.'
         });
     }
 });
@@ -383,8 +472,15 @@ app.get('/api/weather', async (req, res) => {
 /* =========================
    START SERVER
 ========================= */
-const port = process.env.PORT || 5000;
-
-app.listen(port, () => {
+const server = app.listen(port, () => {
     console.log(`🚀 Smart Kisan running: http://localhost:${port}`);
+});
+
+server.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+        console.error(`Port ${port} is already in use. Stop the other process or set PORT to a different value before restarting.`);
+    } else {
+        console.error('Server failed to start:', error);
+    }
+    process.exit(1);
 });

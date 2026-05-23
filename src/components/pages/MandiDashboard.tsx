@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Search, Filter, TrendingUp, ArrowUpRight, ArrowDownRight, Loader2, ArrowRight } from 'lucide-react';
+import { Search, Filter, TrendingUp, Loader2, ArrowRight } from 'lucide-react';
+import { apiUrl } from '../../api';
 
 interface MandiPrice {
+    variety?: string;
     state: string;
     district?: string;
     market: string;
@@ -35,7 +37,7 @@ export default function MandiDashboard() {
             setLoading(true);
             setError('');
             try {
-                const response = await fetch('http://localhost:5000/api/mandi?limit=40');
+                const response = await fetch(apiUrl('/api/mandi?limit=40'));
                 const data: MandiApiResponse = await response.json();
                 if (!response.ok) {
                     throw new Error('मंडी डेटा लोड नहीं हो पाया');
