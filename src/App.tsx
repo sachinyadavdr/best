@@ -25,8 +25,8 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 max-w-md mx-auto relative">
-      <div className="pb-20">
+    <div className="min-h-screen bg-gray-50 relative">
+      <div className="mx-auto w-full max-w-screen-2xl px-4 sm:px-6 lg:px-8 pb-24">
         {renderPage()}
       </div>
       <BottomNav currentPage={currentPage} setPage={setCurrentPage} />
