@@ -107,11 +107,7 @@ function MapClickHandler({
   return null;
 }
 
-interface MeasurementExtended extends Measurement {
-  areaBigha: number;
-}
-
-function calculateMeasurements(latlngs: L.LatLng[]): MeasurementExtended | null {
+function calculateMeasurements(latlngs: L.LatLng[]): Measurement | null {
   if (!latlngs || latlngs.length < 3) return null;
 
   const coords: [number, number][] = latlngs.map((p) => [p.lng, p.lat]);
@@ -129,13 +125,11 @@ function calculateMeasurements(latlngs: L.LatLng[]): MeasurementExtended | null 
   const areaM2 = turf.area(polygon);
   const perimeterM = turf.length(line, { units: "kilometers" }) * 1000;
   const areaAcres = areaM2 / 4046.8564224;
-  const areaBigha = areaAcres / 0.6667; // 1 bigha = 0.6667 acres
 
   return {
     areaM2: Number(areaM2.toFixed(2)),
     areaHa: Number((areaM2 / 10000).toFixed(2)),
     areaAcres: Number(areaAcres.toFixed(2)),
-    areaBigha: Number(areaBigha.toFixed(2)),
     perimeterM: Number(perimeterM.toFixed(2)),
   };
 }
@@ -216,7 +210,7 @@ export default function KhetNaap() {
 
   const [gpsLoading, setGpsLoading] = useState(true);
   const [gpsError, setGpsError] = useState<string | null>(null);
-  const [measurements, setMeasurements] = useState<MeasurementExtended | null>(null);
+  const [measurements, setMeasurements] = useState<Measurement | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isSelectingLocation, setIsSelectingLocation] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -479,13 +473,18 @@ export default function KhetNaap() {
               <MapContainer
                 center={[currentPosition.lat, currentPosition.lng]}
                 zoom={17}
+                minZoom={5}
+                maxZoom={19}
+
                 scrollWheelZoom={true}
                 className="w-full h-full"
               >
                 <TileLayer
                   url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                   attribution='&copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+                  maxNativeZoom={18}
                   maxZoom={19}
+
                 />
                 <TileLayer
                   url="https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
@@ -566,8 +565,8 @@ export default function KhetNaap() {
               <button
                 onClick={() => setIsDrawing((s) => !s)}
                 className={`absolute top-4 left-1/2 -translate-x-1/2 z-[99999] px-6 py-4 rounded-full font-bold text-lg shadow-2xl transition-all duration-300 pointer-events-auto transform hover:scale-110 ${isDrawing
-                    ? 'bg-emerald-600 text-white shadow-emerald-600/50'
-                    : 'bg-green-600 text-white hover:bg-green-700 shadow-green-600/50'
+                  ? 'bg-emerald-600 text-white shadow-emerald-600/50'
+                  : 'bg-green-600 text-white hover:bg-green-700 shadow-green-600/50'
                   }`}
               >
                 {isDrawing ? '✅ Drawing Active' : '✏️ Boundary Banaye'}
@@ -575,7 +574,8 @@ export default function KhetNaap() {
 
               {/* Drawing Toolbar - appears below main button when active */}
               {(isDrawing || points.length > 0) && (
-                <div className="absolute top-20 left-1/2 -translate-x-1/2 z-[99999] flex flex-col gap-3 rounded-2xl bg-white shadow-2xl overflow-hidden pointer-events-auto">
+                //<div className="absolute top-20 left-1/2 -translate-x-1/2 z-[99999] flex flex-col gap-3 rounded-2xl bg-white shadow-2xl overflow-hidden pointer-events-auto"  >
+                <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[99999] w-[82%] max-w-[260px] rounded-2xl bg-white shadow-2xl overflow-hidden pointer-events-auto">
                   {points.length > 0 && (
                     <div className="bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-900 text-center border-b border-blue-100">
                       📍 Points Added: <span className="text-lg font-bold text-blue-600">{points.length}</span>
@@ -593,7 +593,8 @@ export default function KhetNaap() {
                       <button
                         onClick={deleteLastPoint}
                         disabled={points.length === 0}
-                        className="flex-1 rounded-lg px-3 py-2 text-xs font-semibold bg-yellow-100 text-yellow-800 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-yellow-200 transition pointer-events-auto"
+                        // className="flex-1 rounded-lg px-3 py-2 text-xs font-semibold bg-yellow-100 text-yellow-800 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-yellow-200 transition pointer-events-auto"
+                        className="w-full rounded-lg px-3 py-2 text-sm font-semibold bg-emerald-600 text-white disabled:opacity-40"
                       >
                         ↶ Delete Last
                       </button>
@@ -638,12 +639,11 @@ export default function KhetNaap() {
                 </button>
               </div>
 
-              <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+              <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 {[
                   { label: 'वर्ग मीटर', value: `${measurements.areaM2.toLocaleString()} m²` },
                   { label: 'हेक्टेयर', value: `${measurements.areaHa} ha` },
                   { label: 'एकड़', value: `${measurements.areaAcres} acre` },
-                  { label: 'बीघा', value: `${measurements.areaBigha} bigha` },
                   { label: 'परिधि', value: `${measurements.perimeterM} m` },
                 ].map((item) => (
                   <div key={item.label} className="rounded-3xl bg-white p-4 shadow-sm">
