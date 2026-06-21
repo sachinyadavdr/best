@@ -4,7 +4,6 @@ import cors from 'cors';
 import multer from 'multer';
 
 dotenv.config();
-
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -117,7 +116,38 @@ app.get('/api/mandi', async (req, res) => {
 app.get('/api/status', (req, res) => {
     res.json({ status: 'Smart Kisan backend running 🚀' });
 });
+app.get('/api/weather', async (req, res) => {
+    try {
+        const OPENWEATHER_API_KEY = process.env.OPENWEATHER_API_KEY;
+        const lat = req.query.lat || '26.34578';
+        const lon = req.query.lon || '80.4507';
 
+        if (!OPENWEATHER_API_KEY) {
+            return res.status(400).json({ error: 'OpenWeather API key missing' });
+        }
+
+        const url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${OPENWEATHER_API_KEY}&units=metric`;
+
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (!response.ok) {
+            return res.status(500).json({ error: data.message || 'Weather API failed' });
+        }
+
+        return res.json({
+            location: data.name || 'Your Location',
+            condition: data.weather?.[0]?.description || 'Unknown',
+            temp: `${Math.round(data.main.temp)}°C`,
+            max: `${Math.round(data.main.temp_max)}°C`,
+            min: `${Math.round(data.main.temp_min)}°C`,
+            humidity: `${data.main.humidity}%`,
+            wind: `${data.wind.speed} m/s`
+        });
+    } catch (error) {
+        return res.status(500).json({ error: error.message });
+    }
+});
 /* =========================
    FARMING KNOWLEDGE BASE
 ========================= */
@@ -195,13 +225,12 @@ function isGreeting(message, language) {
 }
 
 /* =========================
-   CHATBOT API (GEMINI with Fallback)
+   CHATBOT API (openrout with Fallback)
 ========================= */
 app.post('/api/chat', async (req, res) => {
     try {
         const { message, language = 'en' } = req.body;
-        const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
         if (!message || !message.trim()) {
             return res.status(400).json({
                 reply: language === 'hi'
@@ -257,13 +286,13 @@ app.post('/api/chat', async (req, res) => {
             return res.json({ reply: kbAnswer });
         }
 
-        if (!GEMINI_API_KEY) {
+        if (!OPENROUTER_API_KEY) {
             return res.json({
                 reply: detectedLanguage === 'hi'
-                    ? 'Gemini API key उपलब्ध नहीं है, इसलिए मैं अभी पूरा AI जवाब नहीं दे पा रहा हूँ।'
+                    ? 'OPENROUTER API key उपलब्ध नहीं है, इसलिए मैं अभी पूरा AI जवाब नहीं दे पा रहा हूँ।'
                     : detectedLanguage === 'hinglish'
-                        ? 'Gemini API key available nahi hai, isliye main abhi full AI jawab nahi de pa raha hoon.'
-                        : 'Gemini API key is missing, so I cannot provide a full AI response right now.'
+                        ? 'OPENROUTER API key available nahi hai, isliye main abhi full AI jawab nahi de pa raha hoon.'
+                        : 'OPENROUTER API key is missing, so I cannot provide a full AI response right now.'
             });
         }
 
@@ -295,39 +324,44 @@ Answer style:
 - Do not say "Please ask about pests, water, fertilizers, or crops."
 `;
 
-        const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:5173",
+        "X-Title": "Smart Kisan"
+    },
+    body: JSON.stringify({
+        model: "deepseek/deepseek-chat-v3",
+        messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: message }
+        ]
+    })
+});
 
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'x-goog-api-key': GEMINI_API_KEY,
-            },
-            body: JSON.stringify({
-                system_instruction: {
-                    parts: [{ text: systemPrompt }]
-                },
-                contents: [
-                    {
-                        parts: [{ text: message }]
-                    }
-                ]
-            })
-        });
+const rawText = await response.text();
 
-        const data = await response.json();
+let data;
+try {
+    data = JSON.parse(rawText);
+} catch {
+    console.error('PLANT ID RAW ERROR:', rawText);
+    return res.status(500).json({
+        error: rawText || 'Plant.id returned non-JSON response'
+    });
+}
 
-        if (!response.ok || !data.candidates || !data.candidates[0]?.content?.parts?.[0]?.text) {
-            return res.json({
-                reply: detectedLanguage === 'hi'
-                    ? 'अभी AI जवाब देने में समस्या हो रही है। कृपया थोड़ी देर बाद फिर पूछें।'
-                    : detectedLanguage === 'hinglish'
-                        ? 'Abhi AI jawab dene me problem ho rahi hai. Thodi der baad dobara poochho.'
-                        : 'There is a problem getting an AI response right now. Please try again later.'
-            });
-        }
+console.log("PLANT ID RESPONSE:");
+console.log(JSON.stringify(data, null, 2));
+if (!response.ok) {
+    console.error("OPENROUTER CHAT ERROR:", data);
+    return res.json({ reply: 'AI response me problem aa rahi hai.' });
+}
 
-        return res.json({ reply: data.candidates[0].content.parts[0].text });
+const reply = data.choices?.[0]?.message?.content || 'No reply received.';
+return res.json({ reply });
     } catch (chatError) {
         console.error('Chat error:', chatError);
         return res.status(500).json({
@@ -335,7 +369,160 @@ Answer style:
         });
     }
 });
+app.post('/api/disease-detect', upload.single('image'), async (req, res) => {
+    try {
+       const PLANT_ID_API_KEY = process.env.PLANT_ID_API_KEY;
+const problem = req.body.problem || '';
 
+if (!PLANT_ID_API_KEY) {
+    return res.status(400).json({ error: 'Plant.id API key missing' });
+}
+
+if (!req.file) {
+    return res.status(400).json({ error: 'Image required' });
+}
+
+const imageBase64 = req.file.buffer.toString('base64');
+
+const response = await fetch('https://plant.id/api/v3/identification', {
+    method: 'POST',
+    headers: {
+        'Content-Type': 'application/json',
+        'Api-Key': PLANT_ID_API_KEY
+    },
+    body: JSON.stringify({
+        images: [imageBase64],
+        health: 'all',
+        classification_level: 'species'
+    })
+});
+
+const rawText = await response.text();
+
+let data;
+try {
+    data = JSON.parse(rawText);
+} catch {
+    console.error('PLANT ID RAW ERROR:', rawText);
+    return res.status(500).json({
+        error: rawText || 'Plant.id returned non-JSON response'
+    });
+}
+
+console.log("PLANT ID RESPONSE:");
+console.log(JSON.stringify(data, null, 2));
+
+if (!response.ok) {
+    console.error('PLANT ID ERROR:', data);
+    return res.status(500).json({ error: data.message || 'Plant.id API failed' });
+}
+
+const disease =
+    data.result?.disease?.suggestions?.[0] ||
+    data.result?.classification?.suggestions?.[0] ||
+    null;
+
+console.log("DISEASE FOUND:", disease);
+
+const isPlant =
+    data.result?.is_plant?.binary === true ||
+    data.result?.is_plant?.probability > 0.5;
+
+if (!isPlant) {
+    return res.json({
+        result: {
+            isCrop: false,
+            message: 'यह फसल या पौधे की फोटो नहीं है। कृपया पत्ती/फसल की साफ फोटो अपलोड करें।'
+        }
+    });
+}
+
+const scientificName = disease?.name || 'Unknown';
+const confidence = disease?.probability
+    ? `${Math.round(disease.probability * 100)}%`
+    : 'N/A';
+
+const explainPrompt = `
+Plant disease/pest scientific name: ${scientificName}
+Confidence: ${confidence}
+Farmer problem: ${problem || 'No extra problem written'}
+
+Hindi me farmer ke liye simple JSON do:
+{
+  "hindiName": "रोग/कीट का आसान हिंदी नाम",
+  "scientificName": "${scientificName}",
+  "confidence": "${confidence}",
+  "cause": "यह क्या है और क्यों होता है",
+  "symptoms": ["लक्षण 1", "लक्षण 2", "लक्षण 3"],
+  "damage": "अगर समय पर इलाज न करें तो क्या नुकसान हो सकता है",
+  "treatment": ["तुरंत उपाय 1", "तुरंत उपाय 2", "तुरंत उपाय 3"],
+  "medicine": ["दवा नाम + मात्रा", "दवा नाम + मात्रा"],
+  "prevention": ["बचाव 1", "बचाव 2", "बचाव 3"]
+}
+JSON ke alawa kuch mat likhna.
+`;
+
+const aiResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:5173",
+        "X-Title": "Smart Kisan"
+    },
+    body: JSON.stringify({
+        model: "deepseek/deepseek-chat-v3",
+        messages: [
+            { role: "user", content: explainPrompt }
+        ]
+    })
+});
+
+const aiData = await aiResponse.json();
+let aiText = aiData.choices?.[0]?.message?.content || '';
+
+aiText = aiText.replace(/```json/g, '').replace(/```/g, '').trim();
+
+let aiParsed;
+try {
+    aiParsed = JSON.parse(aiText);
+} catch {
+    console.error("AI JSON PARSE ERROR:", aiText);
+    aiParsed = null;
+}
+
+const result = {
+    isCrop: true,
+    diseaseName: aiParsed?.hindiName || scientificName,
+    scientificName: scientificName,
+    confidence: confidence,
+    cause: aiParsed?.cause || 'फोटो के आधार पर पहचान की गई है।',
+    damage: aiParsed?.damage || '',
+    symptoms: aiParsed?.symptoms || [],
+    treatment: aiParsed?.treatment || [
+        'प्रभावित पत्तियां हटाएं',
+        'खेत में पानी जमा न होने दें',
+        'कृषि विशेषज्ञ से सलाह लें'
+    ],
+    medicine: aiParsed?.medicine || [
+        'Mancozeb 75% WP',
+        'Carbendazim 50% WP'
+    ],
+    prevention: aiParsed?.prevention || [
+        'रोग-रोधी किस्में लगाएं',
+        'फसल चक्र अपनाएं',
+        'बीज उपचार करें'
+    ]
+};
+
+return res.json({ result });
+    } catch (error) {
+        console.error('FULL DISEASE ERROR:', error);
+        return res.status(500).json({
+            error: error.message || 'Disease detection failed'
+        });
+    }
+});
 app.listen(port, () => {
     console.log(`Smart Kisan backend listening on port ${port}`);
 });

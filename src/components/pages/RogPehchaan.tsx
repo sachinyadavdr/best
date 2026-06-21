@@ -9,6 +9,9 @@ interface DiseaseResult {
     ilaj: string[];
     davai: string[];
     bachav: string[];
+    scientificName?: string;
+damage?: string;
+symptoms?: string[];
 }
 
 const diseaseMap: DiseaseResult[] = [
@@ -77,22 +80,41 @@ export default function RogPehchaan() {
         if (fileRef.current?.files?.[0]) {
             formData.append('image', fileRef.current.files[0]);
         }
+fetch(apiUrl('/api/disease-detect'), {
+    method: 'POST',
+    body: formData,
+})
+    .then((res) => res.json())
+    .then((data) => {
+        console.log(data);
 
-        fetch(apiUrl('/api/disease'), {
-            method: 'POST',
-            body: formData,
-        })
-            .then((res) => res.json())
-            .then((data) => {
-                if (data?.diagnosis) {
-                    setResult(data.diagnosis);
-                } else {
-                    setResult(suggestionsOnText(problem));
-                }
-            })
-            .catch(() => {
-                setResult(suggestionsOnText(problem));
-            })
+        if (data?.result?.isCrop === false) {
+            alert(data.result.message);
+            setResult(null);
+            return;
+        }
+
+        if (data?.result) {
+           if (data?.result) {
+    setResult({
+        rog: data.result.diseaseNameHindi || data.result.diseaseName || 'अज्ञात रोग',
+        emoji: '🌿',
+        karan: data.result.cause || '',
+        ilaj: data.result.treatment || [],
+        davai: data.result.medicine || [],
+        bachav: data.result.prevention || [],
+
+        scientificName: data.result.scientificName || '',
+        damage: data.result.damage || '',
+        symptoms: data.result.symptoms || [],
+    });
+} else {
+    setResult(suggestionsOnText(problem));
+}
+        } else {
+            setResult(suggestionsOnText(problem));
+        }
+    })
             .finally(() => setLoading(false));
     };
 
