@@ -482,7 +482,8 @@ const aiData = await aiResponse.json();
 let aiText = aiData.choices?.[0]?.message?.content || '';
 
 aiText = aiText.replace(/```json/g, '').replace(/```/g, '').trim();
-
+console.log("AI RAW RESPONSE:");
+console.log(aiText);
 let aiParsed;
 try {
     aiParsed = JSON.parse(aiText);
