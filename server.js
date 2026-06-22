@@ -334,9 +334,9 @@ Answer style:
     },
     body: JSON.stringify({
     model: "deepseek/deepseek-chat-v3",
-    response_format: { type: "json_object" },
     messages: [
-        { role: "user", content: explainPrompt }
+        { role: "system", content: systemPrompt },
+        { role: "user", content: message }
     ]
 })
 });
