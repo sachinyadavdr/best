@@ -333,12 +333,12 @@ Answer style:
         "X-Title": "Smart Kisan"
     },
     body: JSON.stringify({
-        model: "deepseek/deepseek-chat-v3",
-        messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: message }
-        ]
-    })
+    model: "deepseek/deepseek-chat-v3",
+    response_format: { type: "json_object" },
+    messages: [
+        { role: "user", content: explainPrompt }
+    ]
+})
 });
 
 const rawText = await response.text();
