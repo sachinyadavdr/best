@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MapPin, Trash2, Loader, Save, Search } from "lucide-react";
 import L from "leaflet";
 import { MapContainer, TileLayer, useMap, Circle, CircleMarker, Marker, Popup, Polygon, Polyline } from "react-leaflet";
@@ -10,6 +10,7 @@ interface Measurement {
   areaM2: number;
   areaHa: number;
   areaAcres: number;
+  areaBigha: number;
   perimeterM: number;
 }
 
@@ -125,13 +126,21 @@ function calculateMeasurements(latlngs: L.LatLng[]): Measurement | null {
   const areaM2 = turf.area(polygon);
   const perimeterM = turf.length(line, { units: "kilometers" }) * 1000;
   const areaAcres = areaM2 / 4046.8564224;
+  const areaBigha = areaM2 / 1609.344;
 
   return {
     areaM2: Number(areaM2.toFixed(2)),
     areaHa: Number((areaM2 / 10000).toFixed(2)),
     areaAcres: Number(areaAcres.toFixed(2)),
+    areaBigha: Number(areaBigha.toFixed(2)),
     perimeterM: Number(perimeterM.toFixed(2)),
   };
+}
+
+function buildMeasurementFromPositions(positions: Position[]): Measurement | null {
+  if (positions.length < 3) return null;
+  const latlngs = positions.map((p) => L.latLng(p.lat, p.lng));
+  return calculateMeasurements(latlngs);
 }
 
 // Custom draw click handler — collects points on map click and defers finishing to explicit button
@@ -223,6 +232,17 @@ export default function KhetNaap() {
   const [isDrawing, setIsDrawing] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
 
+  // Walk mode state
+  const [walkModeEnabled, setWalkModeEnabled] = useState(false);
+  const [walkStatus, setWalkStatus] = useState<"idle" | "active" | "paused" | "finished">("idle");
+  const [walkPoints, setWalkPoints] = useState<Position[]>([]);
+  const [walkMeasurements, setWalkMeasurements] = useState<Measurement | null>(null);
+  const [walkAccuracy, setWalkAccuracy] = useState<number | null>(null);
+  const [walkError, setWalkError] = useState<string | null>(null);
+
+  const walkPointsRef = useRef<Position[]>([]);
+  const watchIdRef = useRef<number | null>(null);
+
   const addPoint = (p: Position) => {
     setPoints((prev) => [...prev, p]);
     setIsFinished(false);
@@ -241,12 +261,133 @@ export default function KhetNaap() {
 
   const finishDrawing = () => {
     if (points.length < 3) return;
-    // convert to L.LatLng[] and calculate
     const latlngs = points.map((p) => L.latLng(p.lat, p.lng));
     const m = calculateMeasurements(latlngs);
     setMeasurements(m);
     setIsFinished(true);
     setIsDrawing(false);
+  };
+
+  const clearWalkSession = () => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    walkPointsRef.current = [];
+    setWalkPoints([]);
+    setWalkMeasurements(null);
+    setWalkAccuracy(null);
+    setWalkError(null);
+    setWalkStatus("idle");
+    setWalkModeEnabled(true);
+    setInfoMessage("🧹 Walk session cleared.");
+  };
+
+  const startWalkTracking = (reset = true) => {
+    if (!navigator.geolocation) {
+      setWalkError("GPS is not supported on this device.");
+      return;
+    }
+
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+    }
+
+    if (reset) {
+      walkPointsRef.current = [];
+      setWalkPoints([]);
+      setWalkMeasurements(null);
+      setWalkAccuracy(null);
+    }
+
+    setWalkError(null);
+    setWalkModeEnabled(true);
+    setWalkStatus("active");
+    setInfoMessage("🚶 Walk mode started. Move slowly and the boundary will be traced automatically.");
+
+    const id = navigator.geolocation.watchPosition(
+      (position) => {
+        const newPosition = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        };
+        const accuracy = position.coords.accuracy;
+
+        setCurrentPosition(newPosition);
+        setHasLocation(true);
+        setGpsLoading(false);
+        setGpsError(null);
+        setWalkAccuracy(accuracy);
+
+        if (accuracy > 20) {
+          setWalkError("GPS accuracy is too low. Please move to a more open area.");
+          return;
+        }
+
+        setWalkError(null);
+        const previousPoint = walkPointsRef.current[walkPointsRef.current.length - 1];
+        const shouldAddPoint = walkPointsRef.current.length === 0 || !previousPoint || turf.distance(
+          [previousPoint.lng, previousPoint.lat],
+          [newPosition.lng, newPosition.lat],
+          { units: "meters" }
+        ) >= 3;
+
+        if (shouldAddPoint) {
+          const nextPoints = [...walkPointsRef.current, newPosition];
+          walkPointsRef.current = nextPoints;
+          setWalkPoints(nextPoints);
+          setWalkMeasurements(buildMeasurementFromPositions(nextPoints));
+        }
+      },
+      (error) => {
+        setWalkStatus("idle");
+        if (error.code === error.PERMISSION_DENIED) {
+          setWalkError("GPS permission denied. Please allow location access and try again.");
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          setWalkError("GPS position is currently unavailable. Please try again.");
+        } else {
+          setWalkError("GPS tracking failed. Please try again.");
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 1000,
+        timeout: 20000,
+      }
+    );
+
+    watchIdRef.current = id;
+  };
+
+  const pauseWalkTracking = () => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    setWalkStatus("paused");
+    setWalkError(null);
+    setInfoMessage("⏸️ Walk tracking paused.");
+  };
+
+  const resumeWalkTracking = () => {
+    startWalkTracking(false);
+    setInfoMessage("▶️ Walk tracking resumed.");
+  };
+
+  const stopWalkTracking = () => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    setWalkStatus("finished");
+    setWalkError(null);
+    const finalMeasurements = buildMeasurementFromPositions(walkPointsRef.current);
+    setWalkMeasurements(finalMeasurements);
+    if (finalMeasurements) {
+      setInfoMessage("✅ Walk session completed. Final area calculated.");
+    } else {
+      setInfoMessage("📍 Walk session completed. Add at least 3 points for an area result.");
+    }
   };
 
   const fetchCurrentPosition = (showToast = false) => {
@@ -296,6 +437,14 @@ export default function KhetNaap() {
 
   useEffect(() => {
     fetchCurrentPosition();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      }
+    };
   }, []);
 
   const handleUseMyLocation = () => {
@@ -458,6 +607,75 @@ export default function KhetNaap() {
             </div>
           </div>
 
+          <div className="bg-white rounded-3xl border border-gray-200 p-4 shadow-lg">
+            <div className="flex flex-col gap-3">
+              <button
+                type="button"
+                onClick={() => setWalkModeEnabled((prev) => !prev)}
+                className="w-full rounded-2xl bg-amber-500 px-4 py-3 text-sm font-semibold text-white shadow hover:bg-amber-600"
+              >
+                🚶 Walk Mode
+              </button>
+
+              {walkModeEnabled && (
+                <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50 p-3">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => startWalkTracking(true)}
+                      className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white"
+                    >
+                      Start Walk
+                    </button>
+                    <button
+                      type="button"
+                      onClick={pauseWalkTracking}
+                      disabled={walkStatus !== "active"}
+                      className="rounded-xl bg-slate-700 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Pause
+                    </button>
+                    <button
+                      type="button"
+                      onClick={resumeWalkTracking}
+                      disabled={walkStatus !== "paused"}
+                      className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Resume
+                    </button>
+                    <button
+                      type="button"
+                      onClick={stopWalkTracking}
+                      disabled={walkStatus === "idle" || walkStatus === "finished"}
+                      className="rounded-xl bg-red-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Stop
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearWalkSession}
+                      className="rounded-xl bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700"
+                    >
+                      Clear
+                    </button>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/70 bg-white/80 p-3 text-sm text-slate-700">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold text-slate-900">Status: {walkStatus === "active" ? "Tracking" : walkStatus === "paused" ? "Paused" : walkStatus === "finished" ? "Completed" : "Idle"}</span>
+                      <span className="text-xs text-slate-500">Accuracy: {walkAccuracy !== null ? `${walkAccuracy.toFixed(1)} m` : "Waiting for GPS"}</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-3 text-sm">
+                      <span>Points: {walkPoints.length}</span>
+                      <span>Live area: {walkMeasurements ? `${walkMeasurements.areaM2.toLocaleString()} m²` : "—"}</span>
+                    </div>
+                    {walkError && <p className="mt-2 text-sm text-red-600">{walkError}</p>}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="bg-white rounded-3xl border border-gray-200 shadow-xl overflow-hidden">
             <div className="bg-emerald-50 border-b border-emerald-100 px-5 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -559,6 +777,37 @@ export default function KhetNaap() {
                     pathOptions={{ color: '#059669', fillColor: '#34d399', fillOpacity: 0.12, weight: 3 }}
                   />
                 )}
+
+                {walkPoints.length > 0 && (
+                  <>
+                    <Polyline
+                      positions={walkPoints.map((p) => [p.lat, p.lng])}
+                      pathOptions={{ color: '#f59e0b', weight: 4, opacity: 0.95 }}
+                    />
+                    {walkPoints.length >= 3 && (
+                      <Polygon
+                        positions={[
+                          ...walkPoints.map((p): [number, number] => [p.lat, p.lng]),
+                          [walkPoints[0].lat, walkPoints[0].lng],
+                        ]}
+                        pathOptions={{ color: '#f59e0b', fillColor: '#fde68a', fillOpacity: 0.2, weight: 2 }}
+                      />
+                    )}
+                    {walkPoints.map((point, idx) => {
+                      const pointIcon = L.divIcon({
+                        html: `<div style="width:24px;height:24px;background:#f59e0b;border:2px solid white;border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,0.3);">${idx + 1}</div>`,
+                        className: '',
+                        iconSize: [24, 24],
+                        iconAnchor: [12, 12],
+                      });
+                      return (
+                        <Marker key={`walk-${idx}`} position={[point.lat, point.lng]} icon={pointIcon}>
+                          <Popup>Walk Point {idx + 1}</Popup>
+                        </Marker>
+                      );
+                    })}
+                  </>
+                )}
               </MapContainer>
 
               {/* Main Boundary Floating Action Button */}
@@ -609,7 +858,7 @@ export default function KhetNaap() {
                 </div>
               )}
 
-              <div className="absolute bottom-4 right-4 rounded-full border border-slate-200 bg-white/95 px-4 py-2 text-xs font-semibold text-slate-700 shadow-lg">
+              <div className="absolute bottom-4 right-4 rounded-2xl border border-slate-200 bg-white/95 px-4 py-2 text-xs font-semibold text-slate-700 shadow-lg">
                 {gpsLoading ? (
                   <span className="flex items-center gap-2">
                     <Loader size={12} className="animate-spin" /> GPS...
@@ -617,7 +866,10 @@ export default function KhetNaap() {
                 ) : gpsError ? (
                   '📍 Default location'
                 ) : (
-                  '✅ GPS Active'
+                  <span className="flex items-center gap-2">
+                    <span>✅ GPS Active</span>
+                    {walkAccuracy !== null && <span>• {walkAccuracy.toFixed(1)} m</span>}
+                  </span>
                 )}
               </div>
             </div>
@@ -644,6 +896,7 @@ export default function KhetNaap() {
                   { label: 'वर्ग मीटर', value: `${measurements.areaM2.toLocaleString()} m²` },
                   { label: 'हेक्टेयर', value: `${measurements.areaHa} ha` },
                   { label: 'एकड़', value: `${measurements.areaAcres} acre` },
+                  { label: 'बिघा', value: `${measurements.areaBigha} bigha` },
                   { label: 'परिधि', value: `${measurements.perimeterM} m` },
                 ].map((item) => (
                   <div key={item.label} className="rounded-3xl bg-white p-4 shadow-sm">

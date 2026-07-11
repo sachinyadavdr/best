@@ -153,43 +153,16 @@ export default function HomePage({ setPage }: Props) {
             const response = await fetch(url);
             const data = await response.json();
             const address = data?.address || {};
-            const placeName =
-                address.suburb ||
-                address.neighbourhood ||
-                address.village ||
-                address.hamlet ||
-                address.city_block ||
-                address.residential ||
-                address.road ||
-                address.town ||
-                address.city ||
-                address.county ||
-                address.state ||
-                address.country;
-            const cityOrTown =
-                address.city ||
-                address.town ||
-                address.municipality ||
-                address.city_district ||
-                address.state_district ||
-                address.county ||
-                address.state;
-            const state =
-                address.state ||
-                address.state_district ||
-                address.region ||
-                address.county;
-            const country = address.country;
-            const parts = [placeName, cityOrTown, state, country]
-                .filter((value, index, self) => value && self.indexOf(value) === index);
-            if (parts.length > 1) {
-                return parts.join(', ');
-            }
-            if (data?.display_name) {
-                return data.display_name.split(',').map((part: string) => part.trim()).slice(-4).join(', ');
-            }
-            return placeName || 'Current Location';
-        } catch (error) {
+            const city =
+    address.city ||
+    address.town ||
+    address.village ||
+    address.county;
+
+const state = address.state;
+
+return [city, state].filter(Boolean).join(", ") || "Current Location";}
+ catch (error) {
             return 'Current Location';
         }
     };
@@ -254,13 +227,17 @@ export default function HomePage({ setPage }: Props) {
                         })
                         .catch((err) => {
                             console.error('Geolocation weather failed:', err);
+                            
                             setWeather(defaultWeather);
                         });
                 },
-                (_error) => {
-                    console.log('Geolocation denied, using default city');
-                    fetchDefaultCityWeather();
-                },
+                (error) => {
+    console.error("Geolocation Error:", error);
+    console.log("Code:", error.code);
+    console.log("Message:", error.message);
+
+    fetchDefaultCityWeather();
+},
                 { timeout: 10000, enableHighAccuracy: true }
             );
         } else {

@@ -121,6 +121,9 @@ app.get('/api/weather', async (req, res) => {
         const OPENWEATHER_API_KEY = process.env.OPENWEATHER_API_KEY;
         const lat = req.query.lat || '26.34578';
         const lon = req.query.lon || '80.4507';
+//const OPENWEATHER_API_KEY = process.env.OPENWEATHER_API_KEY;
+
+console.log("OPENWEATHER_API_KEY =", OPENWEATHER_API_KEY);
 
         if (!OPENWEATHER_API_KEY) {
             return res.status(400).json({ error: 'OpenWeather API key missing' });
@@ -130,6 +133,8 @@ app.get('/api/weather', async (req, res) => {
 
         const response = await fetch(url);
         const data = await response.json();
+       
+
 
         if (!response.ok) {
             return res.status(500).json({ error: data.message || 'Weather API failed' });
